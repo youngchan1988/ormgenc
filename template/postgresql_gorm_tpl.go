@@ -8,7 +8,8 @@ import (
 )
 
 const PostgresqlGormTpl = `
-// Package dbmodel Generated code. DO NOT modify by hand!
+// Package dbmodel 
+// Generated code. DO NOT modify by hand!
 package dbmodel
 
 import (
@@ -34,7 +35,7 @@ func Gorm() *gormDB {
 	return instance
 }
 
-func (g *gormDB) Open(dsn string) error {
+func (g *gormDB) Open(dsn string, idleConn int, openConn int) error {
 	var err error
 	g.db, err = gorm.Open(postgres.New(postgres.Config{
 		DSN:                  dsn,
@@ -42,8 +43,8 @@ func (g *gormDB) Open(dsn string) error {
 	}), &gorm.Config{})
 	if err == nil {
 		sqlDB, _ := g.db.DB()
-		sqlDB.SetMaxIdleConns(10)
-		sqlDB.SetMaxOpenConns(100)
+		sqlDB.SetMaxIdleConns(idleConn)
+		sqlDB.SetMaxOpenConns(openConn)
 		sqlDB.SetConnMaxLifetime(time.Hour)
 	}
 	return err
@@ -59,6 +60,8 @@ func (g *gormDB) Close() error {
 `
 
 const PostgresqlGormModelTpl = `
+// Package dbmodel 
+// Generated code. DO NOT modify by hand!
 package dbmodel
 
 import (

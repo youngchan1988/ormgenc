@@ -10,7 +10,7 @@ import (
 	"os/exec"
 )
 
-const version = "v0.0.1"
+const version = "v0.0.2"
 
 func main() {
 	debug := flag.Bool("debug", false, "sets log level to debug")

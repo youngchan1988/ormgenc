@@ -20,9 +20,9 @@ type GormGen struct {
 
 func (g *GormGen) GenerateModel(outPath string) {
 	dbTables := g.DBInterviewer.GetDBTables()
-	err := fileutils.WriteFile(outPath+"/db_model_gen.go", template.PostgresqlGormTpl, true)
+	err := fileutils.WriteFile(outPath+"/dbmodel_gen.go", template.PostgresqlGormTpl, true)
 	if err != nil {
-		log.Error(logTag, err, 1, "write [db_model_gen.go] error")
+		log.Error(logTag, err, 1, "write [dbmodel_gen.go] error")
 		return
 	}
 
@@ -30,7 +30,7 @@ func (g *GormGen) GenerateModel(outPath string) {
 		for _, t := range dbTables {
 			tplString := g.generateModelForTable(t)
 			if !gocommon.IsEmpty(tplString) {
-				err = fileutils.WriteFile(fmt.Sprintf("%s/%s_model_gen.go", outPath, t.Name), tplString, true)
+				err = fileutils.WriteFile(fmt.Sprintf("%s/%smodel_gen.go", outPath, strings.ToLower(stringutils.TocamelCase(t.Name))), tplString, true)
 			}
 		}
 	}
