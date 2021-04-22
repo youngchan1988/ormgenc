@@ -10,7 +10,7 @@ import (
 	"os/exec"
 )
 
-const version = "v0.0.2"
+const version = "v0.0.3"
 
 func main() {
 	debug := flag.Bool("debug", false, "sets log level to debug")
@@ -70,6 +70,13 @@ func main() {
 	execcmd := exec.Command("gofmt", "-w", genDir)
 	fmt.Println(execcmd.String())
 	out, err1 := execcmd.CombinedOutput()
+	fmt.Println(string(out))
+	if err1 != nil {
+		panic(fmt.Sprintf("gofmt failed: %v", err1))
+	}
+	execcmd = exec.Command("goimports", "-w", genDir)
+	fmt.Println(execcmd.String())
+	out, err1 = execcmd.CombinedOutput()
 	fmt.Println(string(out))
 	if err1 != nil {
 		panic(fmt.Sprintf("gofmt failed: %v", err1))

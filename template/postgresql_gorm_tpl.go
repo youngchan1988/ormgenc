@@ -14,8 +14,11 @@ package dbmodel
 
 import (
 	"errors"
+	"github.com/jackc/pgtype"
+	"github.com/youngchan1988/gocommon"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -28,6 +31,7 @@ type gormDB struct {
 
 var instance *gormDB
 
+//Gorm gromDB实例
 func Gorm() *gormDB {
 	once.Do(func() {
 		instance = &gormDB{}
@@ -35,6 +39,7 @@ func Gorm() *gormDB {
 	return instance
 }
 
+//Open 连接数据库，程序启动时调用
 func (g *gormDB) Open(dsn string, idleConn int, openConn int) error {
 	var err error
 	g.db, err = gorm.Open(postgres.New(postgres.Config{
@@ -50,12 +55,151 @@ func (g *gormDB) Open(dsn string, idleConn int, openConn int) error {
 	return err
 }
 
+//Close 关闭数据库
 func (g *gormDB) Close() error {
 	if g.db != nil {
 		sqlDB, _ := g.db.DB()
 		return sqlDB.Close()
 	}
 	return errors.New("database instance is nil")
+}
+
+//EntityToModel 根据tag：'ormgen'，将entity struct 结构转换db model struct 结构
+func EntityToModel(entity interface{}, model interface{}) error {
+	et := reflect.TypeOf(entity)
+	mt := reflect.TypeOf(model)
+
+	if et.Kind() == reflect.Ptr && mt.Kind() == reflect.Ptr {
+		et = et.Elem()
+		mt = mt.Elem()
+		ev := reflect.ValueOf(entity).Elem()
+		mv := reflect.ValueOf(model).Elem()
+		if et.Kind() == reflect.Struct && mt.Kind() == reflect.Struct {
+			for i := 0; i < et.NumField(); i++ {
+				etField := et.Field(i)
+				etFieldTagName := etField.Tag.Get("ormgen")
+				if gocommon.IsEmpty(etFieldTagName) {
+					etFieldTagName = etField.Name
+				}
+				mtField, have := mt.FieldByName(etFieldTagName)
+				mfValue := mv.FieldByName(etFieldTagName)
+				//判断model字段是否存在，数据类型是否一致
+				if have {
+					efValue := ev.Field(i)
+					var mtFieldType reflect.Type
+					var etFieldType reflect.Type
+					if mtField.Type.Kind() == reflect.Ptr {
+						mtFieldType = mtField.Type.Elem()
+					} else {
+						mtFieldType = mtField.Type
+					}
+					if etField.Type.Kind() == reflect.Ptr {
+						etFieldType = etField.Type.Elem()
+					} else {
+						etFieldType = etField.Type
+					}
+					//对model字段赋值
+					if mtFieldType.Name() == etFieldType.Name() {
+						mfValue.Set(ev.Field(i))
+					} else if etField.Type.Kind() == reflect.Ptr &&
+						mtField.Type.Kind() == reflect.Ptr &&
+						mtField.Type.Elem().Name() == "JSONB" {
+						//jsonb 类型的处理
+						jsonb := pgtype.JSONB{}
+						err := jsonb.Set(efValue.Elem().Interface())
+						if err != nil {
+							return err
+						}
+						mfValue.Set(reflect.ValueOf(&jsonb))
+					} else if etField.Type.Kind() == reflect.Struct &&
+						mtField.Type.Kind() == reflect.Ptr &&
+						mtField.Type.Elem().Name() == "JSONB" {
+						//jsonb 类型的处理
+						jsonb := pgtype.JSONB{}
+						err := jsonb.Set(efValue.Interface())
+						if err != nil {
+							return err
+						}
+						mfValue.Set(reflect.ValueOf(&jsonb))
+					}
+				}
+			}
+			return nil
+		}
+		return errors.New("entity and model must be struct ptr")
+	}
+	return errors.New("entity and model must be struct ptr")
+}
+
+//ModelToEntity 根据tag：'ormgen'，将db model struct 结构转换entity struct 结构
+func ModelToEntity(model interface{}, entity interface{}) error {
+	et := reflect.TypeOf(entity)
+	mt := reflect.TypeOf(model)
+
+	if et.Kind() == reflect.Ptr && mt.Kind() == reflect.Ptr {
+		et = et.Elem()
+		mt = mt.Elem()
+		ev := reflect.ValueOf(entity).Elem()
+		mv := reflect.ValueOf(model).Elem()
+		if et.Kind() == reflect.Struct && mt.Kind() == reflect.Struct {
+			for i := 0; i < et.NumField(); i++ {
+				etField := et.Field(i)
+				etFieldTagName := etField.Tag.Get("ormgen")
+				if gocommon.IsEmpty(etFieldTagName) {
+					etFieldTagName = etField.Name
+				}
+				mtField, have := mt.FieldByName(etFieldTagName)
+				mfValue := mv.FieldByName(etFieldTagName)
+				//判断model字段是否存在，数据类型是否一致
+
+				if have {
+					efValue := ev.Field(i)
+					var mtFieldType reflect.Type
+					var etFieldType reflect.Type
+					if mtField.Type.Kind() == reflect.Ptr {
+						mtFieldType = mtField.Type.Elem()
+					} else {
+						mtFieldType = mtField.Type
+					}
+					if etField.Type.Kind() == reflect.Ptr {
+						etFieldType = etField.Type.Elem()
+					} else {
+						etFieldType = etField.Type
+					}
+					//对entity字段赋值
+					if mtFieldType.Name() == etFieldType.Name() {
+						efValue.Set(mfValue)
+					} else if etField.Type.Kind() == reflect.Ptr &&
+						mtField.Type.Kind() == reflect.Ptr &&
+						mtField.Type.Elem().Name() == "JSONB" {
+						//jsonb 类型的处理
+						jsonb := mfValue.Elem().Interface().(pgtype.JSONB)
+						entityValue := reflect.New(etField.Type.Elem())
+						err := jsonb.AssignTo(entityValue.Interface())
+						if err != nil {
+							return err
+						}
+						efValue.Set(entityValue)
+					} else if etField.Type.Kind() == reflect.Struct &&
+						mtField.Type.Kind() == reflect.Ptr &&
+						mtField.Type.Elem().Name() == "JSONB" {
+						//jsonb 类型的处理
+						jsonb := mfValue.Elem().Interface().(pgtype.JSONB)
+						entityValue := reflect.New(etField.Type)
+						err := jsonb.AssignTo(entityValue.Interface())
+						if err != nil {
+							return err
+						}
+						efValue.Set(entityValue.Elem())
+					}
+
+				}
+			}
+			return nil
+		}
+		return errors.New("entity and model must be struct ptr")
+	}
+	return errors.New("entity and model must be struct ptr")
 }
 `
 
@@ -67,161 +211,219 @@ package dbmodel
 import (
 	"errors"
 	"fmt"
+	"github.com/jackc/pgtype"
 	"gorm.io/gorm"
+	"time"
 )
 
+type {{model_name}}DBSelector struct {
+	session *gorm.DB
+}
+
 type {{model_name}}DBModel struct {
-	db *gorm.DB
 	{{model_fields}}
 }
 
-func (g *gormDB){{model_name}}() *{{model_name}}DBModel {
+func (g *gormDB){{model_name}}() *{{model_name}}DBSelector {
 	if g.db == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	g.db = g.db.Table("{{model_underscore_name}}")
-	m := &{{model_name}}DBModel{db: g.db}
-	return m
+	//新建数据库操作会话, SQL响应时间限制5s以内
+	timeoutCtx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	session := g.db.WithContext(timeoutCtx).Table("{{model_underscore_name}}")
+	s := &{{model_name}}DBSelector{session: session}
+	return s
 }
 
-func (m *{{model_name}}DBModel) InsertOne(model *{{model_name}}DBModel) error {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) InsertOne(model *{{model_name}}DBModel) error {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	return m.db.Create(model).Error
+	result := s.session.Create(model)
+	if result.Error == gorm.ErrRecordNotFound {
+		return nil
+	}
+	return result.Error
 }
 
-func (m *{{model_name}}DBModel) InsertMany(models []*{{model_name}}DBModel) error {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) InsertMany(models []*{{model_name}}DBModel) error {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	return m.db.Create(models).Error
+	result := s.session.Create(models)
+	if result.Error == gorm.ErrRecordNotFound {
+		return nil
+	}
+	return result.Error
 }
 
-func (m *{{model_name}}DBModel) Update(model *{{model_name}}DBModel) error {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) Update(model *{{model_name}}DBModel) error {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	return m.db.Updates(model).Error
+	result := s.session.Updates(model)
+	if result.Error == gorm.ErrRecordNotFound {
+		return nil
+	}
+	return result.Error
 }
 
-func (m *{{model_name}}DBModel) UpdateColumn(name string, value interface{}) error {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) UpdateColumn(name string, value interface{}) error {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	return m.db.Update(name, value).Error
+	result := s.session.Update(name, value)
+	if result.Error == gorm.ErrRecordNotFound {
+		return nil
+	}
+	return result.Error
 }
 
-func (m *{{model_name}}DBModel) Delete() error {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) Delete() error {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	return m.db.Delete(&{{model_name}}DBModel{}).Error
+	result := s.session.Delete(&{{model_name}}DBModel{})
+	if result.Error == gorm.ErrRecordNotFound {
+		 return nil
+	}
+	return result.Error
 }
 
-func (m *{{model_name}}DBModel) DeleteOne(id uint) error {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) DeleteOne(id uint) error {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	return m.db.Delete(&{{model_name}}DBModel{}, id).Error
+	result := s.session.Delete(&{{model_name}}DBModel{}, id)
+	if result.Error == gorm.ErrRecordNotFound {
+		return nil
+	}
+	return result.Error
 }
 
-func (m *{{model_name}}DBModel) DeleteMany(ids []uint) error {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) DeleteMany(ids []uint) error {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	return m.db.Delete(&{{model_name}}DBModel{}, ids).Error
+	result := s.session.Delete(&{{model_name}}DBModel{}, ids)
+	if result.Error == gorm.ErrRecordNotFound {
+		return nil
+	}
+	return result.Error
 }
 
-func (m *{{model_name}}DBModel) FindOne() (*{{model_name}}DBModel, error) {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) FindOne() (*{{model_name}}DBModel, error) {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
 	model := &{{model_name}}DBModel{}
-	err := m.db.First(model).Error
-	return model, err
+	result := s.session.First(model)
+	if result.Error == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return model, nil
 }
 
-func (m *{{model_name}}DBModel) FindMany() ([]*{{model_name}}DBModel, error) {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) FindMany() ([]*{{model_name}}DBModel, error) {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
 	models := make([]*{{model_name}}DBModel, 0)
-	err := m.db.Find(&models).Error
-	return models, err
+	result := s.session.Find(&models)
+	if result.Error == gorm.ErrRecordNotFound {
+		return models, nil
+	}
+	return models, result.Error
 }
 
-func (m *{{model_name}}DBModel) Select(columns ...interface{}) *{{model_name}}DBModel {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) Select(columns ...interface{}) *{{model_name}}DBSelector {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	m.db = m.db.Select(columns)
-	return m
+	s.session = s.session.Select(columns)
+	return s
 }
 
-func (m *{{model_name}}DBModel) ByID(id uint) *{{model_name}}DBModel {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) ByID(id uint) *{{model_name}}DBSelector {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	m.db = m.db.Where("id = ?", id)
-	return m
+	s.session = s.session.Where("id = ?", id)
+	return s
 }
 
-func (m *{{model_name}}DBModel) Where(query interface{}, args ...interface{}) *{{model_name}}DBModel {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) Exist() (bool, error) {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	m.db = m.db.Where(query, args)
-	return m
+	result := s.session.First(&{{model_name}}DBModel{})
+	if result.Error == gorm.ErrRecordNotFound {
+		return false, nil
+	}
+	return result.RowsAffected > 0, result.Error
 }
 
-func (m *{{model_name}}DBModel) Limit(limit int) *{{model_name}}DBModel {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) Where(query interface{}, args ...interface{}) *{{model_name}}DBSelector {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	m.db = m.db.Limit(limit)
-	return m
+	s.session = s.session.Where(query, args)
+	return s
 }
 
-func (m *{{model_name}}DBModel) Offset(offset int) *{{model_name}}DBModel {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) Limit(limit int) *{{model_name}}DBSelector {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	m.db = m.db.Offset(offset)
-	return m
+	s.session = s.session.Limit(limit)
+	return s
 }
 
-func (m *{{model_name}}DBModel) OrderBy(column string, sort string) *{{model_name}}DBModel {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) Offset(offset int) *{{model_name}}DBSelector {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	m.db = m.db.Order(fmt.Sprintf("%s %s", column, sort))
-	return m
+	s.session = s.session.Offset(offset)
+	return s
 }
 
-func (m *{{model_name}}DBModel) GroupBy(column string) *{{model_name}}DBModel {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) OrderBy(column string, sort string) *{{model_name}}DBSelector {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	m.db = m.db.Group(column)
-	return m
+	s.session = s.session.Order(fmt.Sprintf("%s %s", column, sort))
+	return s
 }
 
-func (m *{{model_name}}DBModel) Having(query interface{}, args ...interface{}) *{{model_name}}DBModel {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) GroupBy(column string) *{{model_name}}DBSelector {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
-	m.db = m.db.Having(query, args)
-	return m
+	s.session = s.session.Group(column)
+	return s
 }
 
-func (m *{{model_name}}DBModel) Count() (int64, error) {
-	if m.db == nil {
+func (s *{{model_name}}DBSelector) Having(query interface{}, args ...interface{}) *{{model_name}}DBSelector {
+	if s.session == nil {
+		panic(errors.New("unresolved gormDB.db is nil"))
+	}
+	s.session = s.session.Having(query, args)
+	return s
+}
+
+func (s *{{model_name}}DBSelector) Count() (int64, error) {
+	if s.session == nil {
 		panic(errors.New("unresolved gormDB.db is nil"))
 	}
 	var count int64
-	r := m.db.Count(&count)
-	return count, r.Error
+	result := s.session.Count(&count)
+	if result.Error == gorm.ErrRecordNotFound {
+		return 0, nil
+	}
+	return count, result.Error
 }
 `
 
@@ -229,30 +431,31 @@ func PostgresqlGormField(tableColumn *interviewer.DBTableColumn) string {
 	name := stringutils.ToCamelCase(tableColumn.Field)
 
 	switch tableColumn.Type {
-	case "int2":
-	case "int8":
+	case "int2", "int8":
 		if tableColumn.Pk {
-			return fmt.Sprintf("//%s\n %s  int `gorm:\"column:%s\";primaryKey`", tableColumn.Comment, name, tableColumn.Field)
+			return fmt.Sprintf("/*%s\n*/\n %s  int `gorm:\"column:%s;primaryKey\"`", tableColumn.Comment, name, tableColumn.Field)
 		} else {
-			return fmt.Sprintf("//%s\n %s  int `gorm:\"column:%s\"`", tableColumn.Comment, name, tableColumn.Field)
+			return fmt.Sprintf("/*%s\n*/\n %s  int `gorm:\"column:%s\"`", tableColumn.Comment, name, tableColumn.Field)
 		}
 
 	case "varchar":
 		if tableColumn.Pk {
-			return fmt.Sprintf("//%s\n %s string `gorm:\"column:%s\";primaryKey`", tableColumn.Comment, name, tableColumn.Field)
+			return fmt.Sprintf("/*%s\n*/\n %s string `gorm:\"column:%s;primaryKey\"`", tableColumn.Comment, name, tableColumn.Field)
 		} else {
-			return fmt.Sprintf("//%s\n %s string `gorm:\"column:%s\"`", tableColumn.Comment, name, tableColumn.Field)
+			return fmt.Sprintf("/*%s\n*/\n %s string `gorm:\"column:%s\"`", tableColumn.Comment, name, tableColumn.Field)
 		}
 
-	case "timestamptz":
-	case "timestamp":
+	case "timestamptz", "timestamp":
 		if gocommon.IsContains(tableColumn.Field, "created") {
-			return fmt.Sprintf("//%s\n %s time.Time  `gorm:\"autoCreateTime\";column:%s`", tableColumn.Comment, name, tableColumn.Field)
+			return fmt.Sprintf("/*%s\n*/\n %s time.Time  `gorm:\"column:%s;autoCreateTime\"`", tableColumn.Comment, name, tableColumn.Field)
 		} else if gocommon.IsContains(tableColumn.Field, "updated") {
-			return fmt.Sprintf("//%s\n %s time.Time  `gorm:\"autoUpdateTime\";column:%s`", tableColumn.Comment, name, tableColumn.Field)
+			return fmt.Sprintf("/*%s\n*/\n %s time.Time  `gorm:\"column:%s;autoUpdateTime\"`", tableColumn.Comment, name, tableColumn.Field)
 		} else if gocommon.IsContains(tableColumn.Field, "deleted") {
-			return fmt.Sprintf("//%s\n %s gorm.DeletedAt  `gorm:\"index\";column:%s`", tableColumn.Comment, name, tableColumn.Field)
+			return fmt.Sprintf("/*%s\n*/\n %s gorm.DeletedAt  `gorm:\"column:%s;index\"`", tableColumn.Comment, name, tableColumn.Field)
 		}
+
+	case "jsonb":
+		return fmt.Sprintf("/*%s\n*/\n %s *pgtype.JSONB `gorm:\"column:%s\"`", tableColumn.Comment, name, tableColumn.Field)
 	}
 
 	return ""
