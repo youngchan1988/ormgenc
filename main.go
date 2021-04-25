@@ -14,11 +14,11 @@ const version = "v0.0.3"
 
 func main() {
 	debug := flag.Bool("debug", false, "sets log level to debug")
-	targetOrmArg := flag.String("orm", "gorm", "set target orm which like gorm and xorm")
-	targetDbArg := flag.String("db", "postgresql", "set target database which like postgresql and mysql ans sqlite and so on")
+	targetOrmArg := flag.String("orm", "gorm", "set target orm which like 'gorm' and 'xorm'")
+	targetDbArg := flag.String("db", "postgresql", "set target database which like 'postgresql', 'mysql', 'sqlite' and so on")
 	configFile := flag.String("config", "./config.yaml", "set config file path")
 	outPath := flag.String("out", ".", "set output path")
-	versionArg := flag.Bool("version", false, "get current version")
+	versionArg := flag.Bool("version", false, "show current version")
 	help := flag.Bool("help", false, "ormgenc usage")
 	flag.Parse()
 	if *help {
