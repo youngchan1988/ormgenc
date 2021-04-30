@@ -16,7 +16,7 @@ func main() {
 	debug := flag.Bool("debug", false, "sets log level to debug")
 	targetOrmArg := flag.String("orm", "gorm", "set target orm which like 'gorm' and 'xorm'")
 	targetDbArg := flag.String("db", "postgresql", "set target database which like 'postgresql', 'mysql', 'sqlite' and so on")
-	configFile := flag.String("config", "./config.yaml", "set config file path")
+	configFile := flag.String("config", "./config.yml", "set config file path")
 	outPath := flag.String("out", ".", "set output path")
 	versionArg := flag.Bool("version", false, "show current version")
 	help := flag.Bool("help", false, "ormgenc usage")
@@ -32,7 +32,7 @@ func main() {
 	log.Init(*debug, "", "")
 	viper.SetConfigFile(*configFile)
 	//viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
+	viper.SetConfigType("yml")
 	//viper.AddConfigPath(".")
 	err := viper.ReadInConfig()
 	if err != nil {
