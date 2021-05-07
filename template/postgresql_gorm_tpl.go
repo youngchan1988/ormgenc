@@ -34,7 +34,7 @@ type GormDB struct {
 }
 
 var instance *GormDB
-var txWaiter sync.WaitGroup
+var mutex sync.Mutex
 
 //Gorm gromDB实例
 func Gorm() *GormDB {
@@ -71,10 +71,10 @@ func (g *GormDB) Close() error {
 
 //Transaction 使用事务, 加了同步信号锁
 func (g *GormDB) Transaction(body func(tx *GormDB) error, opts ...*sql.TxOptions) error {
-	txWaiter.Add(1)
+	defer mutex.Unlock()
+	mutex.Lock()
 
 	err := g.db.Transaction(func(tx *gorm.DB) error {
-		defer txWaiter.Done()
 		gormTx := &GormDB{
 			db: tx,
 		}
@@ -85,7 +85,6 @@ func (g *GormDB) Transaction(body func(tx *GormDB) error, opts ...*sql.TxOptions
 		return err
 	}
 
-	txWaiter.Wait()
 	return nil
 }
 
@@ -371,7 +370,7 @@ func (s *{{model_name}}DBSelector) FindOne() (*{{model_name}}DBModel, error) {
 		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	model := &{{model_name}}DBModel{}
-	result := s.session.First(model)
+	result := s.session.Limit(1).Find(model)
 	if result.Error == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -413,7 +412,7 @@ func (s *{{model_name}}DBSelector) Exist() (bool, error) {
 	if s.session == nil {
 		panic(errors.New("unresolved GormDB.db is nil"))
 	}
-	result := s.session.First(&{{model_name}}DBModel{})
+	result := s.session.Limit(1).Find(&{{model_name}}DBModel{})
 	if result.Error == gorm.ErrRecordNotFound {
 		return false, nil
 	}
