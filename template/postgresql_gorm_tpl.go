@@ -13,34 +13,39 @@ const PostgresqlGormTpl = `
 package dbmodel
 
 import (
+	"database/sql"
 	"errors"
-	"github.com/jackc/pgtype"
-	"github.com/youngchan1988/gocommon"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
+	"github.com/youngchan1988/gocommon/log"
 	"reflect"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgtype"
+	"github.com/youngchan1988/gocommon"
+	"github.com/youngchan1988/gocommon/cast"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 var once sync.Once
 
-type gormDB struct {
+type GormDB struct {
 	db *gorm.DB
 }
 
-var instance *gormDB
+var instance *GormDB
+var txWaiter sync.WaitGroup
 
 //Gorm gromDB实例
-func Gorm() *gormDB {
+func Gorm() *GormDB {
 	once.Do(func() {
-		instance = &gormDB{}
+		instance = &GormDB{}
 	})
 	return instance
 }
 
 //Open 连接数据库，程序启动时调用
-func (g *gormDB) Open(dsn string, idleConn int, openConn int) error {
+func (g *GormDB) Open(dsn string, idleConn int, openConn int) error {
 	var err error
 	g.db, err = gorm.Open(postgres.New(postgres.Config{
 		DSN:                  dsn,
@@ -56,12 +61,32 @@ func (g *gormDB) Open(dsn string, idleConn int, openConn int) error {
 }
 
 //Close 关闭数据库
-func (g *gormDB) Close() error {
+func (g *GormDB) Close() error {
 	if g.db != nil {
 		sqlDB, _ := g.db.DB()
 		return sqlDB.Close()
 	}
 	return errors.New("database instance is nil")
+}
+
+//Transaction 使用事务, 加了同步信号锁
+func (g *GormDB) Transaction(body func(tx *GormDB) error, opts ...*sql.TxOptions) error {
+	txWaiter.Add(1)
+
+	err := g.db.Transaction(func(tx *gorm.DB) error {
+		defer txWaiter.Done()
+		gormTx := &GormDB{
+			db: tx,
+		}
+		return body(gormTx)
+	}, opts...)
+	if err != nil {
+		log.Error("dbmodel", err, 1, "transaction error")
+		return err
+	}
+
+	txWaiter.Wait()
+	return nil
 }
 
 //EntityToModel 根据tag：'ormgen'，将entity struct 结构转换db model struct 结构
@@ -101,9 +126,20 @@ func EntityToModel(entity interface{}, model interface{}) error {
 					//对model字段赋值
 					if mtFieldType.Name() == etFieldType.Name() {
 						mfValue.Set(ev.Field(i))
+					} else if etField.Type.Kind() == reflect.Bool {
+						//处理bool类型
+						if mtField.Type.Kind() == reflect.Uint || mtField.Type.Kind() == reflect.Uint64 {
+							mfValue.SetUint(cast.InterfaceToUInt64WithDefault(efValue.Interface(), 0))
+						} else if mtField.Type.Kind() == reflect.Int || mtField.Type.Kind() == reflect.Int64 {
+							mfValue.SetInt(cast.InterfaceToInt64WithDefault(efValue.Interface(), 0))
+						}
 					} else if etField.Type.Kind() == reflect.Ptr &&
 						mtField.Type.Kind() == reflect.Ptr &&
-						mtField.Type.Elem().Name() == "JSONB" {
+						mtField.Type.Elem().Name() == "JSONB" &&
+						mfValue.IsValid() &&
+						efValue.IsValid() &&
+						!efValue.IsZero() &&
+						!efValue.IsNil(){
 						//jsonb 类型的处理
 						jsonb := pgtype.JSONB{}
 						err := jsonb.Set(efValue.Elem().Interface())
@@ -113,7 +149,11 @@ func EntityToModel(entity interface{}, model interface{}) error {
 						mfValue.Set(reflect.ValueOf(&jsonb))
 					} else if etField.Type.Kind() == reflect.Struct &&
 						mtField.Type.Kind() == reflect.Ptr &&
-						mtField.Type.Elem().Name() == "JSONB" {
+						mtField.Type.Elem().Name() == "JSONB" &&
+						mfValue.IsValid() &&
+						efValue.IsValid() &&
+						!efValue.IsZero() &&
+						!efValue.IsNil(){
 						//jsonb 类型的处理
 						jsonb := pgtype.JSONB{}
 						err := jsonb.Set(efValue.Interface())
@@ -169,9 +209,18 @@ func ModelToEntity(model interface{}, entity interface{}) error {
 					//对entity字段赋值
 					if mtFieldType.Name() == etFieldType.Name() {
 						efValue.Set(mfValue)
+					} else if etField.Type.Kind() == reflect.Bool {
+						//处理bool类型
+						boolValue := cast.InterfaceToBoolWithDefault(mfValue.Interface(), false)
+						efValue.SetBool(boolValue)
 					} else if etField.Type.Kind() == reflect.Ptr &&
 						mtField.Type.Kind() == reflect.Ptr &&
-						mtField.Type.Elem().Name() == "JSONB" {
+						mtField.Type.Elem().Name() == "JSONB" &&
+						mfValue.IsValid() &&
+						!mfValue.IsZero() &&
+						!mfValue.IsNil() &&
+						efValue.IsValid() &&
+						!efValue.IsNil(){
 						//jsonb 类型的处理
 						jsonb := mfValue.Elem().Interface().(pgtype.JSONB)
 						entityValue := reflect.New(etField.Type.Elem())
@@ -182,7 +231,12 @@ func ModelToEntity(model interface{}, entity interface{}) error {
 						efValue.Set(entityValue)
 					} else if etField.Type.Kind() == reflect.Struct &&
 						mtField.Type.Kind() == reflect.Ptr &&
-						mtField.Type.Elem().Name() == "JSONB" {
+						mtField.Type.Elem().Name() == "JSONB" &&
+						mfValue.IsValid() &&
+						!mfValue.IsZero() &&
+						!mfValue.IsNil() &&
+						efValue.IsValid() &&
+						!efValue.IsNil(){
 						//jsonb 类型的处理
 						jsonb := mfValue.Elem().Interface().(pgtype.JSONB)
 						entityValue := reflect.New(etField.Type)
@@ -224,9 +278,9 @@ type {{model_name}}DBModel struct {
 	{{model_fields}}
 }
 
-func (g *gormDB){{model_name}}() *{{model_name}}DBSelector {
+func (g *GormDB){{model_name}}() *{{model_name}}DBSelector {
 	if g.db == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	//新建数据库操作会话, SQL响应时间限制5s以内
 	timeoutCtx, _ := context.WithTimeout(context.Background(), 5*time.Second)
@@ -237,7 +291,7 @@ func (g *gormDB){{model_name}}() *{{model_name}}DBSelector {
 
 func (s *{{model_name}}DBSelector) InsertOne(model *{{model_name}}DBModel) error {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	result := s.session.Create(model)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -248,7 +302,7 @@ func (s *{{model_name}}DBSelector) InsertOne(model *{{model_name}}DBModel) error
 
 func (s *{{model_name}}DBSelector) InsertMany(models []*{{model_name}}DBModel) error {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	result := s.session.Create(models)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -259,7 +313,7 @@ func (s *{{model_name}}DBSelector) InsertMany(models []*{{model_name}}DBModel) e
 
 func (s *{{model_name}}DBSelector) Update(model *{{model_name}}DBModel) error {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	result := s.session.Updates(model)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -270,7 +324,7 @@ func (s *{{model_name}}DBSelector) Update(model *{{model_name}}DBModel) error {
 
 func (s *{{model_name}}DBSelector) UpdateColumn(name string, value interface{}) error {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	result := s.session.Update(name, value)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -281,7 +335,7 @@ func (s *{{model_name}}DBSelector) UpdateColumn(name string, value interface{}) 
 
 func (s *{{model_name}}DBSelector) Delete() error {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	result := s.session.Delete(&{{model_name}}DBModel{})
 	if result.Error == gorm.ErrRecordNotFound {
@@ -290,9 +344,9 @@ func (s *{{model_name}}DBSelector) Delete() error {
 	return result.Error
 }
 
-func (s *{{model_name}}DBSelector) DeleteOne(id uint) error {
+func (s *{{model_name}}DBSelector) DeleteOne(id int) error {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	result := s.session.Delete(&{{model_name}}DBModel{}, id)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -301,9 +355,9 @@ func (s *{{model_name}}DBSelector) DeleteOne(id uint) error {
 	return result.Error
 }
 
-func (s *{{model_name}}DBSelector) DeleteMany(ids []uint) error {
+func (s *{{model_name}}DBSelector) DeleteMany(ids []int) error {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	result := s.session.Delete(&{{model_name}}DBModel{}, ids)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -314,7 +368,7 @@ func (s *{{model_name}}DBSelector) DeleteMany(ids []uint) error {
 
 func (s *{{model_name}}DBSelector) FindOne() (*{{model_name}}DBModel, error) {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	model := &{{model_name}}DBModel{}
 	result := s.session.First(model)
@@ -329,7 +383,7 @@ func (s *{{model_name}}DBSelector) FindOne() (*{{model_name}}DBModel, error) {
 
 func (s *{{model_name}}DBSelector) FindMany() ([]*{{model_name}}DBModel, error) {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	models := make([]*{{model_name}}DBModel, 0)
 	result := s.session.Find(&models)
@@ -341,15 +395,15 @@ func (s *{{model_name}}DBSelector) FindMany() ([]*{{model_name}}DBModel, error) 
 
 func (s *{{model_name}}DBSelector) Select(columns ...interface{}) *{{model_name}}DBSelector {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	s.session = s.session.Select(columns)
 	return s
 }
 
-func (s *{{model_name}}DBSelector) ByID(id uint) *{{model_name}}DBSelector {
+func (s *{{model_name}}DBSelector) ByID(id int) *{{model_name}}DBSelector {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	s.session = s.session.Where("id = ?", id)
 	return s
@@ -357,7 +411,7 @@ func (s *{{model_name}}DBSelector) ByID(id uint) *{{model_name}}DBSelector {
 
 func (s *{{model_name}}DBSelector) Exist() (bool, error) {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	result := s.session.First(&{{model_name}}DBModel{})
 	if result.Error == gorm.ErrRecordNotFound {
@@ -368,15 +422,15 @@ func (s *{{model_name}}DBSelector) Exist() (bool, error) {
 
 func (s *{{model_name}}DBSelector) Where(query interface{}, args ...interface{}) *{{model_name}}DBSelector {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
-	s.session = s.session.Where(query, args)
+	s.session = s.session.Where(query, args...)
 	return s
 }
 
 func (s *{{model_name}}DBSelector) Limit(limit int) *{{model_name}}DBSelector {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	s.session = s.session.Limit(limit)
 	return s
@@ -384,7 +438,7 @@ func (s *{{model_name}}DBSelector) Limit(limit int) *{{model_name}}DBSelector {
 
 func (s *{{model_name}}DBSelector) Offset(offset int) *{{model_name}}DBSelector {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	s.session = s.session.Offset(offset)
 	return s
@@ -392,7 +446,7 @@ func (s *{{model_name}}DBSelector) Offset(offset int) *{{model_name}}DBSelector 
 
 func (s *{{model_name}}DBSelector) OrderBy(column string, sort string) *{{model_name}}DBSelector {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	s.session = s.session.Order(fmt.Sprintf("%s %s", column, sort))
 	return s
@@ -400,7 +454,7 @@ func (s *{{model_name}}DBSelector) OrderBy(column string, sort string) *{{model_
 
 func (s *{{model_name}}DBSelector) GroupBy(column string) *{{model_name}}DBSelector {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	s.session = s.session.Group(column)
 	return s
@@ -408,15 +462,15 @@ func (s *{{model_name}}DBSelector) GroupBy(column string) *{{model_name}}DBSelec
 
 func (s *{{model_name}}DBSelector) Having(query interface{}, args ...interface{}) *{{model_name}}DBSelector {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
-	s.session = s.session.Having(query, args)
+	s.session = s.session.Having(query, args...)
 	return s
 }
 
 func (s *{{model_name}}DBSelector) Count() (int64, error) {
 	if s.session == nil {
-		panic(errors.New("unresolved gormDB.db is nil"))
+		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	var count int64
 	result := s.session.Count(&count)
