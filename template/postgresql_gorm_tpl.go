@@ -218,8 +218,7 @@ func ModelToEntity(model interface{}, entity interface{}) error {
 						mfValue.IsValid() &&
 						!mfValue.IsZero() &&
 						!mfValue.IsNil() &&
-						efValue.IsValid() &&
-						!efValue.IsNil(){
+						efValue.IsValid(){
 						//jsonb 类型的处理
 						jsonb := mfValue.Elem().Interface().(pgtype.JSONB)
 						entityValue := reflect.New(etField.Type.Elem())
@@ -234,8 +233,7 @@ func ModelToEntity(model interface{}, entity interface{}) error {
 						mfValue.IsValid() &&
 						!mfValue.IsZero() &&
 						!mfValue.IsNil() &&
-						efValue.IsValid() &&
-						!efValue.IsNil(){
+						efValue.IsValid(){
 						//jsonb 类型的处理
 						jsonb := mfValue.Elem().Interface().(pgtype.JSONB)
 						entityValue := reflect.New(etField.Type)
@@ -419,11 +417,27 @@ func (s *{{model_name}}DBSelector) Exist() (bool, error) {
 	return result.RowsAffected > 0, result.Error
 }
 
+func (s *{{model_name}}DBSelector) In(column string, data interface{}) *{{model_name}}DBSelector {
+	if s.session == nil {
+		panic(errors.New("unresolved GormDB.db is nil"))
+	}
+	s.session = s.session.Where(column + " IN ?", data)
+	return s
+}
+
 func (s *{{model_name}}DBSelector) Where(query interface{}, args ...interface{}) *{{model_name}}DBSelector {
 	if s.session == nil {
 		panic(errors.New("unresolved GormDB.db is nil"))
 	}
 	s.session = s.session.Where(query, args...)
+	return s
+}
+
+func (s *{{model_name}}DBSelector) Search(column string, key string) *{{model_name}}DBSelector {
+	if s.session == nil {
+		panic(errors.New("unresolved GormDB.db is nil"))
+	}
+	s.session = s.session.Where(column + " ~ ?", key)
 	return s
 }
 
@@ -478,13 +492,14 @@ func (s *{{model_name}}DBSelector) Count() (int64, error) {
 	}
 	return count, result.Error
 }
+
 `
 
 func PostgresqlGormField(tableColumn *interviewer.DBTableColumn) string {
 	name := stringutils.ToCamelCase(tableColumn.Field)
 
 	switch tableColumn.Type {
-	case "int2", "int8":
+	case "int2", "int4", "int8", "int", "bigint":
 		if tableColumn.Pk {
 			return fmt.Sprintf("/*%s\n*/\n %s  int `gorm:\"column:%s;primaryKey\"`", tableColumn.Comment, name, tableColumn.Field)
 		} else {
