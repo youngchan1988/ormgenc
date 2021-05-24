@@ -132,30 +132,19 @@ func EntityToModel(entity interface{}, model interface{}) error {
 						} else if mtField.Type.Kind() == reflect.Int || mtField.Type.Kind() == reflect.Int64 {
 							mfValue.SetInt(cast.InterfaceToInt64WithDefault(efValue.Interface(), 0))
 						}
-					} else if etField.Type.Kind() == reflect.Ptr &&
-						mtField.Type.Kind() == reflect.Ptr &&
+					} else if  mtField.Type.Kind() == reflect.Ptr &&
 						mtField.Type.Elem().Name() == "JSONB" &&
 						mfValue.IsValid() &&
 						efValue.IsValid() &&
 						!efValue.IsZero() &&
-						!efValue.IsNil(){
+						!efValue.IsNil() {
 						//jsonb 类型的处理
 						jsonb := pgtype.JSONB{}
-						err := jsonb.Set(efValue.Elem().Interface())
-						if err != nil {
-							return err
+						v := efValue.Interface()
+						if etField.Type.Kind() == reflect.Ptr {
+							v = efValue.Elem().Interface()
 						}
-						mfValue.Set(reflect.ValueOf(&jsonb))
-					} else if etField.Type.Kind() == reflect.Struct &&
-						mtField.Type.Kind() == reflect.Ptr &&
-						mtField.Type.Elem().Name() == "JSONB" &&
-						mfValue.IsValid() &&
-						efValue.IsValid() &&
-						!efValue.IsZero() &&
-						!efValue.IsNil(){
-						//jsonb 类型的处理
-						jsonb := pgtype.JSONB{}
-						err := jsonb.Set(efValue.Interface())
+						err := jsonb.Set(v)
 						if err != nil {
 							return err
 						}
@@ -212,36 +201,28 @@ func ModelToEntity(model interface{}, entity interface{}) error {
 						//处理bool类型
 						boolValue := cast.InterfaceToBoolWithDefault(mfValue.Interface(), false)
 						efValue.SetBool(boolValue)
-					} else if etField.Type.Kind() == reflect.Ptr &&
-						mtField.Type.Kind() == reflect.Ptr &&
+					} else if mtField.Type.Kind() == reflect.Ptr &&
 						mtField.Type.Elem().Name() == "JSONB" &&
 						mfValue.IsValid() &&
 						!mfValue.IsZero() &&
 						!mfValue.IsNil() &&
-						efValue.IsValid(){
+						efValue.IsValid() {
 						//jsonb 类型的处理
 						jsonb := mfValue.Elem().Interface().(pgtype.JSONB)
-						entityValue := reflect.New(etField.Type.Elem())
+						t := etField.Type
+						if etField.Type.Kind() == reflect.Ptr {
+							t = etField.Type.Elem()
+						}
+						entityValue := reflect.New(t)
 						err := jsonb.AssignTo(entityValue.Interface())
 						if err != nil {
 							return err
 						}
-						efValue.Set(entityValue)
-					} else if etField.Type.Kind() == reflect.Struct &&
-						mtField.Type.Kind() == reflect.Ptr &&
-						mtField.Type.Elem().Name() == "JSONB" &&
-						mfValue.IsValid() &&
-						!mfValue.IsZero() &&
-						!mfValue.IsNil() &&
-						efValue.IsValid(){
-						//jsonb 类型的处理
-						jsonb := mfValue.Elem().Interface().(pgtype.JSONB)
-						entityValue := reflect.New(etField.Type)
-						err := jsonb.AssignTo(entityValue.Interface())
-						if err != nil {
-							return err
+						if etField.Type.Kind() == reflect.Ptr {
+							efValue.Set(entityValue)
+						}else{
+							efValue.Set(entityValue.Elem())
 						}
-						efValue.Set(entityValue.Elem())
 					}
 
 				}
@@ -252,6 +233,20 @@ func ModelToEntity(model interface{}, entity interface{}) error {
 	}
 	return errors.New("entity and model must be struct ptr")
 }
+
+func ToJsonb(obj interface{}) (*pgtype.JSONB, error) {
+	jsonb := &pgtype.JSONB{}
+	err := jsonb.Set(obj)
+	if err != nil {
+		return nil, err
+	}
+	return jsonb, nil
+}
+
+func FromJsonb(jsonb *pgtype.JSONB, obj interface{}) error {
+	return jsonb.AssignTo(obj)
+}
+
 `
 
 const PostgresqlGormModelTpl = `
@@ -375,6 +370,9 @@ func (s *{{model_name}}DBSelector) FindOne() (*{{model_name}}DBModel, error) {
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	if result.RowsAffected == 0 {
+		return nil, nil
+	}
 	return model, nil
 }
 
@@ -385,7 +383,13 @@ func (s *{{model_name}}DBSelector) FindMany() ([]*{{model_name}}DBModel, error) 
 	models := make([]*{{model_name}}DBModel, 0)
 	result := s.session.Find(&models)
 	if result.Error == gorm.ErrRecordNotFound {
-		return models, nil
+		return nil, nil
+	}
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
 	}
 	return models, result.Error
 }
@@ -436,6 +440,9 @@ func (s *{{model_name}}DBSelector) Where(query interface{}, args ...interface{})
 func (s *{{model_name}}DBSelector) Search(column string, key string) *{{model_name}}DBSelector {
 	if s.session == nil {
 		panic(errors.New("unresolved GormDB.db is nil"))
+	}
+	if len(key) == 0 {
+		return s
 	}
 	s.session = s.session.Where(column + " ~ ?", key)
 	return s
