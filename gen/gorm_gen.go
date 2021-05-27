@@ -25,6 +25,11 @@ func (g *GormGen) GenerateModel(outPath string) {
 		log.Error(logTag, err, 1, "write [dbmodel_gen.go] error")
 		return
 	}
+	err = fileutils.WriteFile(outPath+"/dbutils_gen.go", template.PostgresqlGormUtilsTpl, true)
+	if err != nil {
+		log.Error(logTag, err, 1, "write [dbutils_gen.go] error")
+		return
+	}
 
 	if !gocommon.IsEmpty(dbTables) {
 		for _, t := range dbTables {

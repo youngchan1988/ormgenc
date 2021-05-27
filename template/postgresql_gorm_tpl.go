@@ -15,14 +15,10 @@ package dbmodel
 import (
 	"database/sql"
 	"errors"
-	"github.com/youngchan1988/gocommon/log"
-	"reflect"
 	"sync"
 	"time"
 
-	"github.com/jackc/pgtype"
-	"github.com/youngchan1988/gocommon"
-	"github.com/youngchan1988/gocommon/cast"
+	"github.com/youngchan1988/gocommon/log"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -88,6 +84,22 @@ func (g *GormDB) Transaction(body func(tx *GormDB) error, opts ...*sql.TxOptions
 	return nil
 }
 
+`
+
+const PostgresqlGormUtilsTpl = `
+// Package dbmodel 
+// Generated code. DO NOT modify by hand!
+package dbmodel
+
+import (
+	"errors"
+	"github.com/jackc/pgtype"
+	"github.com/youngchan1988/gocommon"
+	"github.com/youngchan1988/gocommon/cast"
+	"github.com/youngchan1988/gocommon/log"
+	"reflect"
+)
+
 //EntityToModel 根据tag：'ormgen'，将entity struct 结构转换db model struct 结构
 func EntityToModel(entity interface{}, model interface{}) error {
 	et := reflect.TypeOf(entity)
@@ -103,7 +115,7 @@ func EntityToModel(entity interface{}, model interface{}) error {
 				etField := et.Field(i)
 				etFieldTagName := etField.Tag.Get("ormgen")
 				if gocommon.IsEmpty(etFieldTagName) {
-					etFieldTagName = etField.Name
+					continue
 				}
 				mtField, have := mt.FieldByName(etFieldTagName)
 				mfValue := mv.FieldByName(etFieldTagName)
@@ -132,7 +144,7 @@ func EntityToModel(entity interface{}, model interface{}) error {
 						} else if mtField.Type.Kind() == reflect.Int || mtField.Type.Kind() == reflect.Int64 {
 							mfValue.SetInt(cast.InterfaceToInt64WithDefault(efValue.Interface(), 0))
 						}
-					} else if  mtField.Type.Kind() == reflect.Ptr &&
+					} else if mtField.Type.Kind() == reflect.Ptr &&
 						mtField.Type.Elem().Name() == "JSONB" &&
 						mfValue.IsValid() &&
 						efValue.IsValid() &&
@@ -174,7 +186,7 @@ func ModelToEntity(model interface{}, entity interface{}) error {
 				etField := et.Field(i)
 				etFieldTagName := etField.Tag.Get("ormgen")
 				if gocommon.IsEmpty(etFieldTagName) {
-					etFieldTagName = etField.Name
+					continue
 				}
 				mtField, have := mt.FieldByName(etFieldTagName)
 				mfValue := mv.FieldByName(etFieldTagName)
@@ -213,14 +225,21 @@ func ModelToEntity(model interface{}, entity interface{}) error {
 						if etField.Type.Kind() == reflect.Ptr {
 							t = etField.Type.Elem()
 						}
+
 						entityValue := reflect.New(t)
+						if t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+							entityValue.Elem().Set(reflect.MakeSlice(t, 0, 0))
+						} else if t.Kind() == reflect.Map {
+							entityValue.Elem().Set(reflect.MakeMap(t))
+						}
+						log.Debugf("modeltoenttiy", "entity value type: %T\n", entityValue.Interface())
 						err := jsonb.AssignTo(entityValue.Interface())
 						if err != nil {
 							return err
 						}
 						if etField.Type.Kind() == reflect.Ptr {
 							efValue.Set(entityValue)
-						}else{
+						} else {
 							efValue.Set(entityValue.Elem())
 						}
 					}
